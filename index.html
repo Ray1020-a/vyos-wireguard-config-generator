@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.0/css/bulma.min.css">
+  <title>Wireguard 配置生成器</title>
+</head>
+
+<body>
+  <section class="section">
+    <div id="app" class="container">
+      <div class="columns">
+        <div class="column">
+          <h2 class="title">Wireguard 配置生成器 (伺服端為 VyOS)</h2>
+          <div class="buttons">
+            <button class="button is-primary" @click="updateclients">生成</button>
+          </div>
+          <article class="panel">
+            <table class="table">
+              <tr>
+                <td>
+                  伺服器IP: <input v-model="server"> 端口: <input v-model="port">
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  WireGuard 內部IP: <input v-model="network" size="6"><br>
+                  客戶端第一個 IP: <input v-model="startip" size="1"><br>
+                  客戶端數量: <input v-model="clientcount" size="3"><br>
+                  WireGuard 網卡ID: <input v-model="wgnum" size="3"><br>
+                  客戶端 AllowedIPs: <input v-model="allowedips" size="25"><br>
+                  (ex. 10.0.0.0/24, 10.99.0.0/24)<br><br>
+                  客戶端保持連線: <input v-model="pkl" size="2">秒 (可選)<br>
+                </td>
+              </tr>
+              <tr>
+                <td>
+                  伺服器私鑰: <input v-model="serverkeys.privateKey" size="20"><br>
+                  伺服器公鑰: <input v-model="serverkeys.publicKey" size="20">
+                </td>
+              </tr>
+            </table>
+          </article>
+          <article class="panel">
+            <p class="panel-heading">伺服器設定 {{ server }}:{{ port }}</p>
+            <p class="panel-block">
+              <code style="font-size:small;">
+                set interfaces wireguard wg{{ wgnum }} address '{{ network }}.1/32'<br>
+                set interfaces wireguard wg{{ wgnum }} port '{{ port }}'<br>
+                set interfaces wireguard wg{{ wgnum }} private-key '{{ serverkeys.privateKey }}'<br>
+                <span v-for="line in oldconfig">{{ line }}<br></span>
+                  <span v-for="(value, client) in clients"><br>
+                  set interfaces wireguard wg{{ wgnum }} peer client{{ client }} allowed-ips '{{ network }}.{{ client }}/32'<br>
+                  set interfaces wireguard wg{{ wgnum }} peer client{{ client }} public-key '{{ value.publicKey }}'<br>
+                  </span>
+                </span>
+              </code>
+            </p>
+          </article>
+        </div>
+        <div class="column">
+          <article class="panel">
+            <p class="panel-heading">客戶端設定 (第一個 IP: {{network}}.{{startip}}, 數量: {{ clientcount }} 個)</p>
+            <div class="panel-block" v-for="(value, client) in clients">
+              <canvas :id="'canvas'+client"></canvas>
+              <div>
+                <input v-model="value.name">
+                <code class="panel-block" style="font-size:small;" :id="'code'+client"><span @click="select">[Interface]<br>
+                ## {{ value.name }}<br>
+                Address = {{ network }}.{{ client }}/24<br>
+                PrivateKey = {{ value.privateKey }}<br>
+                [Peer]<br>
+                PublicKey = {{ serverkeys.publicKey }}<br>
+                AllowedIPs = {{ allowedips }}<br>
+                Endpoint = {{ server }}:{{ port }}<br>
+				        {{ pklState }}
+                </span></code>
+                <button class="button is-link is-small" @click="downloadConf(client)">下載設定檔</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </section>
+  <script src="https://unpkg.com/vue@2.6.12/dist/vue.js"></script>
+  <script src="https://unpkg.com/qrcode@1.4.4/build/qrcode.min.js"></script>
+  <script src="wireguard.js"></script>
+  <script>
+    new Vue({
+      el: "#app",
+      data() {
+        return {
+          server: "wg.ray-tw.com",
+          port: 51820,
+          network: "10.99.0",
+          startip: 2,
+          clientcount: 1,
+          wgnum: "0",
+          allowedips: "10.99.0.0/24",
+          oldconfig: [],
+          clients: {},
+          pkl: "",
+          serverkeys: wireguard.generateKeypair()
+        };
+      },
+      methods: {
+        select(event) {
+          r = document.createRange(); r.selectNode(event.target.closest("span"));
+          s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        },
+        updateclients(event) {
+          this.clients = this.makeclients;
+          var clients = this.clients;
+          setTimeout(function () {
+            for (client in clients) {
+              QRCode.toCanvas(document.getElementById('canvas' + client), document.getElementById('code' + client).innerText)
+            }
+          });
+        },
+        downloadConf(client) {
+          const codeElement = document.getElementById('code' + client);
+          if (!codeElement) return;
+          const text = codeElement.innerText;
+          const blob = new Blob([text], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `client${client}.conf`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+      },
+      computed: {
+        makeclients() {
+          var c = {};
+          for (client in [...Array(Math.floor(this.clientcount)).keys()]) {
+            finaloctet = Math.floor(client) + Math.floor(this.startip);
+            c[finaloctet] = wireguard.generateKeypair();
+            c[finaloctet].name = "Client " + finaloctet;
+          }
+          return c
+        },
+        pklState() {
+          return this.pkl ? "PersistentKeepalive = " + this.pkl : "";
+        }
+      }
+    });
+  </script>
+</body>
+
+</html>

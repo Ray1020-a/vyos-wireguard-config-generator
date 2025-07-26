@@ -1,0 +1,1 @@
+# vyos-wireguard-config-generator
